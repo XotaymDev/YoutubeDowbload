@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>YouTube Загрузчик</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root{
+      --bg:#1e1e2f; --panel:#2b2b3d; --acc:#4cafef; --acc2:#369ddc; --txt:#fff; --muted:#bfc3d9;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:linear-gradient(120deg, #181824, var(--bg));
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:var(--txt);
+      padding:24px;
+      display:flex; justify-content:center;
+    }
+    .wrap{
+      width: min(1100px, 100%);
+    }
+    h1{margin:0 0 16px; font-weight:800; letter-spacing:0.3px}
+    .card{
+      background:var(--panel); border-radius:16px; padding:16px; box-shadow:0 8px 30px rgba(0,0,0,.25);
+      display:grid; gap:12px;
+    }
+    .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+    input[type=text], select, button{
+      border:none; outline:none; border-radius:12px; padding:12px 14px; background:#222232; color:var(--txt);
+    }
+    input[type=text]{flex:1; min-width:240px}
+    button{background:var(--acc); cursor:pointer; font-weight:600}
+    button:hover{background:var(--acc2)}
+    .muted{color:var(--muted); font-size:14px}
+    .grid{
+      display:grid; grid-template-columns: 1fr 1fr; gap:16px;
+    }
+    .media, .meta{background:#23233a; border-radius:14px; padding:12px}
+    video{width:100%; border-radius:10px; margin-top:8px}
+    img.thumb{max-width:100%; border-radius:10px}
+    .formats{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .formats select{min-width:180px}
+    @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>YouTube загрузчик 🎥</h1>
+    <div class="card">
+      <form id="mainForm" class="row">
+        <input type="text" name="url" id="url" placeholder="Вставь ссылку с YouTube" required>
+        <button type="submit">Получить информацию</button>
+        <button type="button" id="btnLoadFormats" title="Загрузить список качеств">Качества</button>
+      </form>
+      <div class="muted">Сначала жмёшь «Получить информацию», потом можно выбрать качество, проигрывать и скачивать.</div>
+
+      <div class="grid">
+        <div class="media">
+          <div id="playerBox" class="muted">Тут будет плеер</div>
+        </div>
+        <div class="meta">
+          <div id="infoBox" class="muted">Тут будет информация о видео</div>
+          <hr style="border-color:#3a3a57">
+          <div class="formats">
+            <label for="format">Качество:</label>
+            <select id="format"></select>
+            <button id="btnPlay">▶ Проиграть</button>
+            <button id="btnDirectDownload">⬇ Скачать напрямую</button>
+            <form id="serverDownloadForm" action="/download" method="POST" style="display:inline;">
+              <input type="hidden" name="url" id="serverUrl">
+              <input type="hidden" name="format_id" id="serverFormat">
+              <button type="submit">⬇ Скачать через сервер</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const f = document.getElementById('mainForm');
+    const urlInput = document.getElementById('url');
+    const infoBox = document.getElementById('infoBox');
+    const playerBox = document.getElementById('playerBox');
+    const fmtSelect = document.getElementById('format');
+    const btnPlay = document.getElementById('btnPlay');
+    const btnDirectDownload = document.getElementById('btnDirectDownload');
+    const btnLoadFormats = document.getElementById('btnLoadFormats');
+    const serverUrl = document.getElementById('serverUrl');
+    const serverFormat = document.getElementById('serverFormat');
+
+    let lastInfo = null;
+    let lastVideoUrl = null;
+
+    function setInfo(info){
+      infoBox.innerHTML = `
+        <div><strong>${info.title || 'Без названия'}</strong></div>
+        <div class="muted">Автор: ${info.uploader || 'Неизвестно'}</div>
+        ${info.thumbnail ? `<img class="thumb" src="${info.thumbnail}" alt="thumb">` : ''}
+      `;
+    }
+
+    function setPlayer(src, title){
+      playerBox.innerHTML = `
+        <div class="muted">${title ? title : ''}</div>
+        <video src="${src}" controls autoplay></video>
+      `;
+    }
+
+    function setFormats(formats){
+      fmtSelect.innerHTML = '';
+      if (!formats || !formats.length){
+        fmtSelect.innerHTML = `<option value="">— нет форматов —</option>`;
+        return;
+      }
+      // Добавим "авто" сверху
+      const auto = document.createElement('option');
+      auto.value = '';
+      auto.textContent = 'Авто (best mp4/best)';
+      fmtSelect.appendChild(auto);
+
+      for (const f of formats){
+        const opt = document.createElement('option');
+        opt.value = f.format_id;
+        opt.textContent = `${f.format_id} — ${f.ext || ''} — ${f.label}`;
+        fmtSelect.appendChild(opt);
+      }
+    }
+
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(f);
+      const url = fd.get('url');
+      serverUrl.value = url; // для серверного скачивания
+
+      infoBox.textContent = 'Загружаю информацию...';
+      playerBox.textContent = '—';
+      fmtSelect.innerHTML = '<option>—</option>';
+      lastInfo = null;
+      lastVideoUrl = null;
+
+      const res = await fetch('/get_info', { method:'POST', body: fd });
+      const data = await res.json();
+
+      if (data.success){
+        lastInfo = data.info;
+        setInfo({
+          title: data.info.title,
+          uploader: data.info.uploader,
+          thumbnail: data.info.thumbnail
+        });
+      } else {
+        infoBox.textContent = data.error || 'Ошибка';
+      }
+    });
+
+    btnLoadFormats.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url){ alert('Вставь URL'); return; }
+      fmtSelect.innerHTML = '<option>Загружаю форматы…</option>';
+      try {
+        const fd = new FormData();
+        fd.append('url', url);
+        const res = await fetch('/get_formats', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.success){
+          setFormats(data.formats);
+        } else {
+          fmtSelect.innerHTML = `<option>Ошибка: ${data.error}</option>`;
+        }
+      } catch (e){
+        fmtSelect.innerHTML = `<option>Ошибка сети</option>`;
+      }
+    });
+
+    btnPlay.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url){ alert('Вставь URL'); return; }
+      const format_id = fmtSelect.value || '';
+      const fd = new FormData();
+      fd.append('url', url);
+      if (format_id) fd.append('format_id', format_id);
+
+      playerBox.textContent = 'Готовлю прямой URL...';
+      const res = await fetch('/get_video_url', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success){
+        lastVideoUrl = data.video_url;
+        setPlayer(data.video_url, data.title);
+        // также обновим инфу, если ещё не пришла
+        if (!lastInfo){
+          setInfo({ title: data.title, uploader: data.uploader, thumbnail: data.thumbnail });
+        }
+      } else {
+        playerBox.textContent = data.error || 'Не удалось получить прямой URL';
+      }
+    });
+
+    btnDirectDownload.addEventListener('click', async () => {
+      const url = urlInput.value.trim();
+      if (!url){ alert('Вставь URL'); return; }
+      const format_id = fmtSelect.value || '';
+      // Если уже есть прямой URL (после Play), используем его
+      if (lastVideoUrl){
+        const a = document.createElement('a');
+        a.href = lastVideoUrl;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      // Иначе запросим прямой линк на выбранный формат и сразу качнём
+      const fd = new FormData();
+      fd.append('url', url);
+      if (format_id) fd.append('format_id', format_id);
+      const res = await fetch('/get_video_url', { method:'POST', body: fd });
+      const data = await res.json();
+      if (data.success){
+        const a = document.createElement('a');
+        a.href = data.video_url;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else {
+        alert(data.error || 'Не удалось получить прямой URL');
+      }
+    });
+
+    // Перед серверным скачиванием обновляем скрытый формат
+    document.getElementById('serverDownloadForm').addEventListener('submit', (e) => {
+      serverFormat.value = fmtSelect.value || '';
+    });
+  </script>
+</body>
+</html>
